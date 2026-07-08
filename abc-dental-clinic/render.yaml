@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: abc-dental-clinic-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DB_NAME
+        value: dental_clinic_db
+      - key: APP_NAME
+        value: abc-dental-clinic
+      - key: REMINDER_CRON_HOUR
+        value: "20"
+      - key: REMINDER_CRON_MINUTE
+        value: "0"
+      - key: REMINDER_TIMEZONE
+        value: Asia/Kolkata
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGO_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DOCTOR_EMAIL
+        sync: false
+      - key: DOCTOR_PASSWORD
+        sync: false
+      - key: RECEPTIONIST_EMAIL
+        sync: false
+      - key: RECEPTIONIST_PASSWORD
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false

@@ -1,0 +1,9 @@
+json
+{
+  "short_name": "ABC Dental",
+  "name": "ABC Dental Clinic",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1E3A8A",
+  "background_color": "#ffffff"
+}
