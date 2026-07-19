@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { Plus, Trash2, Download, FileText } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const emptyItem = { procedure: "", description: "", quantity: 1, rate: 0, amount: 0 };
 const emptyForm = {
@@ -18,13 +19,14 @@ const emptyForm = {
 };
 
 export default function Invoices() {
+  const { activeClinicId } = useAuth();
   const [rows, setRows] = useState(null);
   const [patients, setPatients] = useState([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
 
   const load = async () => { const {data} = await api.get("/invoices"); setRows(data); };
-  useEffect(() => { load(); api.get("/patients?limit=500").then(r=>setPatients(r.data.items)); }, []);
+  useEffect(() => { setRows(null); load(); api.get("/patients?limit=500").then(r=>setPatients(r.data.items)); }, [activeClinicId]);
 
   const recalc = (items, discount = form.discount, tax = form.tax, paid = form.paid_amount) => {
     const subtotal = items.reduce((s, it) => s + Number(it.amount || 0), 0);
@@ -57,10 +59,28 @@ export default function Invoices() {
   const downloadPdf = async (inv) => {
     try {
       const r = await api.get(`/invoices/${inv.id}/pdf`, { responseType: "blob" });
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement("a"); a.href = url; a.download = `${inv.invoice_number}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error("Download failed"); }
+      const blob = new Blob([r.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${inv.invoice_number || "invoice"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      let msg = "Download failed";
+      if (e?.response?.data instanceof Blob) {
+        try {
+          const text = await e.response.data.text();
+          const json = JSON.parse(text);
+          if (json?.detail) msg = formatApiError(json.detail);
+        } catch (_) {}
+      } else if (e?.response?.data?.detail) {
+        msg = formatApiError(e.response.data.detail);
+      }
+      toast.error(msg);
+    }
   };
 
   return (

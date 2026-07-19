@@ -9,17 +9,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Plus, Stethoscope } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const empty = { patient_id: "", procedure_name: "", treatment_date: new Date().toISOString().slice(0,10), procedure_cost: 0, procedure_description: "", remarks: "" };
 
 export default function Treatments() {
+  const { activeClinicId } = useAuth();
   const [rows, setRows] = useState(null);
   const [patients, setPatients] = useState([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
 
   const load = async () => { const {data} = await api.get("/treatments"); setRows(data); };
-  useEffect(() => { load(); api.get("/patients?limit=500").then(r=>setPatients(r.data.items)); }, []);
+  useEffect(() => { setRows(null); load(); api.get("/patients?limit=500").then(r=>setPatients(r.data.items)); }, [activeClinicId]);
 
   const save = async () => {
     try {

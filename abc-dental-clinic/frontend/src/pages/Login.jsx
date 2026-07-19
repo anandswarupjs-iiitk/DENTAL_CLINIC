@@ -46,7 +46,7 @@ export default function Login() {
               <Activity className="w-5 h-5" />
             </div>
             <div>
-              <div className="font-bold text-lg" style={{fontFamily:"Manrope"}}>ABC Dental Clinic</div>
+              <div className="font-bold text-lg" style={{fontFamily:"Manrope"}}>Your Dental</div>
               <div className="text-xs opacity-80">Clinic Management Suite</div>
             </div>
           </div>
@@ -56,10 +56,10 @@ export default function Login() {
               <span className="text-teal-200">Elegant workflow.</span>
             </h1>
             <p className="text-lg opacity-90 max-w-md">
-              Manage patients, appointments, treatments and billing — all in one calm, modern workspace crafted for Dr. Avi B P.
+              Manage patients, appointments, treatments and billing — all in one calm, modern workspace.
             </p>
           </motion.div>
-          <div className="text-xs opacity-70">© {new Date().getFullYear()} ABC Dental Clinic · All rights reserved</div>
+          <div className="text-xs opacity-70">© {new Date().getFullYear()} Your Dental · All rights reserved</div>
         </div>
       </div>
 
@@ -71,7 +71,7 @@ export default function Login() {
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#1E3A8A] to-[#0D9488] flex items-center justify-center">
                 <Activity className="w-5 h-5 text-white"/>
               </div>
-              <div className="font-bold" style={{fontFamily:"Manrope"}}>ABC Dental</div>
+              <div className="font-bold" style={{fontFamily:"Manrope"}}>Your Dental</div>
             </div>
             <h2 className="text-3xl font-extrabold" style={{fontFamily:"Manrope"}}>Welcome back</h2>
             <p className="text-slate-500 dark:text-slate-400 mt-2 mb-8">Sign in to continue to your dashboard.</p>

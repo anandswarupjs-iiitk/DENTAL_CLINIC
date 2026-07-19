@@ -8,10 +8,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar,
 } from "recharts";
+import { useAuth } from "@/context/AuthContext";
 
 const iso = (d) => d.toISOString().slice(0,10);
 
 export default function Reports() {
+  const { activeClinicId } = useAuth();
   const today = new Date();
   const monthAgo = new Date(today); monthAgo.setDate(today.getDate()-30);
   const [df, setDf] = useState(iso(monthAgo));
@@ -26,7 +28,7 @@ export default function Reports() {
     ]);
     setRevenue(r1.data); setOutstanding(r2.data);
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [activeClinicId]);
 
   const exportCsv = (rows, name) => {
     if (!rows.length) return;

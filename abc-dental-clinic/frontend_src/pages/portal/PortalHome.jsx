@@ -64,11 +64,31 @@ export default function PortalHome() {
 
   const downloadPdf = async (inv) => {
     try {
-      const r = await portalApi.get(`/invoices/${inv.id}/pdf`, { responseType: "blob" });
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement("a"); a.href = url; a.download = `${inv.invoice_number}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error("Download failed"); }
+      const r = await portalApi.get(`/portal/invoices/${inv.id}/pdf`, { responseType: "blob" });
+      const blob = new Blob([r.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${inv.invoice_number || "invoice"}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      let msg = "Download failed";
+      if (e?.response?.status === 403) {
+        msg = "Access denied";
+      } else if (e?.response?.data instanceof Blob) {
+        try {
+          const text = await e.response.data.text();
+          const json = JSON.parse(text);
+          if (json?.detail) msg = formatApiError(json.detail);
+        } catch (_) {}
+      } else if (e?.response?.data?.detail) {
+        msg = formatApiError(e.response.data.detail);
+      }
+      toast.error(msg);
+    }
   };
 
   const handleLogout = () => { logout(); nav("/portal/login"); };
@@ -84,7 +104,7 @@ export default function PortalHome() {
         <div className="max-w-6xl mx-auto flex items-center justify-between px-6 h-16">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#0D9488] to-[#1E3A8A] flex items-center justify-center"><Activity className="w-4 h-4 text-white"/></div>
-            <div><div className="font-bold" style={{fontFamily:"Manrope"}}>ABC Dental Portal</div><div className="text-xs text-slate-500">Welcome, {patient.full_name}</div></div>
+            <div><div className="font-bold" style={{fontFamily:"Manrope"}}>{patient.clinic_name || "Your Dental"} Portal</div><div className="text-xs text-slate-500">Welcome, {patient.full_name}</div></div>
           </div>
           <Button variant="outline" size="sm" onClick={handleLogout} data-testid="portal-logout"><LogOut size={14} className="mr-1"/>Logout</Button>
         </div>

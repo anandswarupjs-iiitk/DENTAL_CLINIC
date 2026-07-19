@@ -34,12 +34,13 @@ function StatCard({ icon: Icon, label, value, color, i }) {
 const CHART_COLORS = ["#1E3A8A","#0D9488","#3B82F6","#F59E0B","#EF4444","#8B5CF6","#EC4899","#10B981","#F97316","#06B6D4"];
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user, activeClinicId } = useAuth();
   const [data, setData] = useState(null);
 
   useEffect(() => {
+    setData(null);
     api.get("/dashboard/summary").then(r => setData(r.data)).catch(()=>{});
-  }, []);
+  }, [activeClinicId]);
 
   if (!data) return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

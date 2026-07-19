@@ -70,6 +70,7 @@ async def get_current_user(request: Request) -> dict:
             raise HTTPException(status_code=401, detail="User not found")
         user["id"] = str(user.pop("_id"))
         user.pop("password_hash", None)
+        user["_active_clinic_id"] = request.headers.get("X-Clinic-Id")
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")

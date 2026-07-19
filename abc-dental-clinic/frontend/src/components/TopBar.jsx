@@ -10,15 +10,23 @@ import {
   DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function TopBar({ onOpenSidebar }) {
   const { theme, toggle } = useTheme();
-  const { user, logout } = useAuth();
+  const { user, logout, activeClinicId, setActiveClinicId } = useAuth();
   const nav = useNavigate();
   const [q, setQ] = useState("");
   const [res, setRes] = useState(null);
   const [notifs, setNotifs] = useState([]);
+  const [clinics, setClinics] = useState([]);
   const unread = notifs.filter(n => !n.read).length;
+
+  useEffect(() => {
+    if (user?.role === "admin") {
+      api.get("/clinics").then(r => setClinics(r.data)).catch(()=>{});
+    }
+  }, [user]);
 
   useEffect(() => {
     const t = setTimeout(async () => {
@@ -78,6 +86,22 @@ export default function TopBar({ onOpenSidebar }) {
             </div>
           )}
         </div>
+
+        {user?.role === "admin" && (
+          <div className="w-56 mr-2">
+            <Select value={activeClinicId || "global"} onValueChange={(val) => setActiveClinicId(val === "global" ? "" : val)}>
+              <SelectTrigger data-testid="topbar-clinic-select" className="h-10 bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-lg">
+                <SelectValue placeholder="All Clinics (Global)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">All Clinics (Global)</SelectItem>
+                {clinics.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <button onClick={toggle} data-testid="theme-toggle" className="p-2.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
           {theme === "dark" ? <Sun size={18}/> : <Moon size={18}/>}

@@ -9,10 +9,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Plus, CreditCard } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const empty = { patient_id: "", invoice_id: "", amount: 0, payment_method: "cash", transaction_id: "", payment_date: new Date().toISOString().slice(0,10), notes: "" };
 
 export default function Payments() {
+  const { activeClinicId } = useAuth();
   const [rows, setRows] = useState(null);
   const [patients, setPatients] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -21,10 +23,11 @@ export default function Payments() {
 
   const load = async () => { const {data} = await api.get("/payments"); setRows(data); };
   useEffect(() => {
+    setRows(null);
     load();
     api.get("/patients?limit=500").then(r=>setPatients(r.data.items));
     api.get("/invoices").then(r=>setInvoices(r.data));
-  }, []);
+  }, [activeClinicId]);
 
   const save = async () => {
     try {

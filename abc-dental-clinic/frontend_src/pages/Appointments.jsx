@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Plus, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const STATUS_COLORS = {
   booked: "bg-blue-100 text-blue-700 border-blue-200",
@@ -28,6 +29,7 @@ const RESCHEDULE_REASONS = [
 ];
 
 export default function Appointments() {
+  const { activeClinicId } = useAuth();
   const [appts, setAppts] = useState(null);
   const [patients, setPatients] = useState([]);
   const [open, setOpen] = useState(false);
@@ -49,8 +51,8 @@ export default function Appointments() {
     const { data } = await api.get(`/appointments?date_from=${f}&date_to=${t}`);
     setAppts(data);
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [refDate, view]);
-  useEffect(() => { api.get("/patients?limit=500").then(r => setPatients(r.data.items)).catch(()=>{}); }, []);
+  useEffect(() => { setAppts(null); load(); /* eslint-disable-next-line */ }, [refDate, view, activeClinicId]);
+  useEffect(() => { api.get("/patients?limit=500").then(r => setPatients(r.data.items)).catch(()=>{}); }, [activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm({...emptyAppt, date: refDate.toISOString().slice(0,10)}); setOpen(true); };
   const openEdit = (a) => { setEditing(a); setForm({patient_id:a.patient_id, date:a.date, time:a.time, reason:a.reason||"", status:a.status, notes:a.notes||""}); setOpen(true); };

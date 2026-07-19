@@ -13,6 +13,7 @@ import { Search, Plus, Edit, Trash2, User } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import { useAuth } from "@/context/AuthContext";
 
 const emptyPatient = {
   full_name: "", age: "", gender: "", phone: "",
@@ -23,6 +24,7 @@ const emptyPatient = {
 };
 
 export default function Patients() {
+  const { activeClinicId } = useAuth();
   const [rows, setRows] = useState(null);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
@@ -34,7 +36,7 @@ export default function Patients() {
     const { data } = await api.get(`/patients?search=${encodeURIComponent(q)}&limit=100`);
     setRows(data.items); setTotal(data.total);
   };
-  useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [q]);
+  useEffect(() => { setRows(null); const t = setTimeout(load, 300); return () => clearTimeout(t); }, [q, activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm(emptyPatient); setOpen(true); };
   const openEdit = (p) => { setEditing(p); setForm({...emptyPatient, ...p, age: p.age || ""}); setOpen(true); };

@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Plus, Trash2, UserCog, Edit, Clock } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const DAYS = [
   ["mon","Monday"],["tue","Tuesday"],["wed","Wednesday"],["thu","Thursday"],
@@ -21,13 +22,14 @@ const emptyDoc = {
 };
 
 export default function Doctors() {
+  const { activeClinicId } = useAuth();
   const [rows, setRows] = useState(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyDoc);
   const [editing, setEditing] = useState(null);
 
   const load = async () => { const {data} = await api.get("/doctors"); setRows(data); };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { setRows(null); load(); }, [activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm({...emptyDoc, schedule: {...emptySchedule}}); setOpen(true); };
   const openEdit = (d) => {

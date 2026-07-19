@@ -1,0 +1,17 @@
+2026/07/18-00:07:33.610 4d54 Reusing MANIFEST c:\DENTAL_CLINIC\abc-dental-clinic\whatsapp-service\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/07/18-00:07:33.611 4d54 Recovering log #19
+2026/07/18-00:07:33.679 4d54 Reusing old log c:\DENTAL_CLINIC\abc-dental-clinic\whatsapp-service\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000019.log 
+2026/07/18-00:07:33.680 4d54 Delete type=2 #17
+2026/07/18-00:07:33.680 4d54 Delete type=2 #20
+2026/07/18-00:46:43.430 1c08 Level-0 table #25: started
+2026/07/18-00:46:43.860 1c08 Level-0 table #25: 1201357 bytes OK
+2026/07/18-00:46:43.867 1c08 Delete type=0 #19
+2026/07/18-13:04:26.872 4d54 Compacting 1@1 + 3@2 files
+2026/07/18-13:04:26.934 4d54 Generated table #26@1: 36777 keys, 2204694 bytes
+2026/07/18-13:04:26.956 4d54 Generated table #27@1: 14830 keys, 385289 bytes
+2026/07/18-13:04:26.956 4d54 Compacted 1@1 + 3@2 files => 2589983 bytes
+2026/07/18-13:04:26.957 4d54 compacted to: files[ 0 0 2 0 0 0 0 ]
+2026/07/18-13:04:26.958 4d54 Delete type=2 #18
+2026/07/18-13:04:26.958 4d54 Delete type=2 #21
+2026/07/18-13:04:26.958 4d54 Delete type=2 #22
+2026/07/18-13:04:26.958 4d54 Delete type=2 #25

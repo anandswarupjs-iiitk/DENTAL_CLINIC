@@ -22,6 +22,7 @@ import models as M
 import auth as A
 import storage as S
 import email_service as N
+import sms
 from pdf_gen import generate_invoice_pdf
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -59,6 +60,23 @@ def _clean(doc: dict) -> dict:
     return doc
 
 
+def _filter_clinic(q: dict, user: dict) -> dict:
+    if user.get("role") != "admin":
+        if user.get("clinic_id"):
+            q["clinic_id"] = user["clinic_id"]
+    else:
+        active_id = user.get("_active_clinic_id")
+        if active_id and active_id != "all":
+            q["clinic_id"] = active_id
+    return q
+
+
+def _get_user_clinic_id(user: dict) -> Optional[str]:
+    if user.get("role") == "admin":
+        return user.get("_active_clinic_id") or user.get("clinic_id")
+    return user.get("clinic_id")
+
+
 # ---------------- STARTUP ----------------
 @app.on_event("startup")
 async def startup():
@@ -73,6 +91,7 @@ async def startup():
     # Seed
     await seed_users()
     await seed_settings()
+    await seed_clinics()
     # Storage
     try:
         S.init_storage()
@@ -180,6 +199,38 @@ async def seed_settings():
             "doctor_title": "Orthodontist",
             "updated_at": now_iso(),
         })
+
+
+async def seed_clinics():
+    if await db.clinics.count_documents({}) == 0:
+        res = await db.clinics.insert_one({
+            "name": "ABC Dental Clinic",
+            "address": "123 Smile Street, Bangalore, KA",
+            "phone": "+91-9999999999",
+            "email": "contact@abcdental.com",
+            "created_at": now_iso()
+        })
+        cid = str(res.inserted_id)
+        # Assign existing seeded doctor/receptionist to this clinic!
+        await db.users.update_many({"role": {"$in": ["doctor", "receptionist"]}}, {"$set": {"clinic_id": cid}})
+        await db.doctors.update_many({}, {"$set": {"clinic_id": cid}})
+        # Initialize settings for this default clinic as well!
+        await db.settings.update_one(
+            {"clinic_id": cid},
+            {"$set": {
+                "clinic_name": "ABC Dental Clinic",
+                "address": "123 Smile Street, Bangalore, KA",
+                "phone": "+91-9999999999",
+                "email": "contact@abcdental.com",
+                "invoice_prefix": "INV",
+                "currency": "INR",
+                "timezone": "Asia/Kolkata",
+                "doctor_name": "Dr. Avi B P",
+                "doctor_title": "Orthodontist",
+                "clinic_id": cid,
+            }},
+            upsert=True
+        )
 
 
 # ---------------- AUTH ----------------
@@ -308,8 +359,23 @@ async def create_user(payload: M.RegisterIn, user: dict = Depends(A.require_role
         "role": payload.role,
         "created_at": now_iso(),
     }
+    if payload.clinic_id:
+        doc["clinic_id"] = payload.clinic_id
     r = await db.users.insert_one(doc)
     doc["_id"] = r.inserted_id
+    
+    if payload.role == "doctor":
+        existing_dr = await db.doctors.find_one({"email": email})
+        if not existing_dr:
+            await db.doctors.insert_one({
+                "name": payload.name,
+                "email": email,
+                "specialization": "General Dentist",
+                "active": True,
+                "clinic_id": payload.clinic_id,
+                "created_at": now_iso(),
+            })
+
     return _clean(doc)
 
 
@@ -318,6 +384,50 @@ async def delete_user(uid: str, user: dict = Depends(A.require_roles("admin"))):
     if uid == user["id"]:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     await db.users.delete_one({"_id": oid(uid)})
+    return {"ok": True}
+
+
+# ---------------- CLINICS ----------------
+@api.get("/public/clinics")
+async def list_public_clinics():
+    clinics = await db.clinics.find({}).to_list(500)
+    return [{"id": str(c["_id"]), "name": c["name"]} for c in clinics]
+
+
+@api.get("/clinics")
+async def list_clinics(user: dict = Depends(A.require_roles("admin"))):
+    clinics = await db.clinics.find({}).to_list(500)
+    return [_clean(c) for c in clinics]
+
+
+@api.post("/clinics")
+async def create_clinic(payload: M.ClinicIn, user: dict = Depends(A.require_roles("admin"))):
+    doc = payload.model_dump()
+    doctor_name = doc.pop("doctor_name", None)
+    doctor_email = doc.pop("doctor_email", None)
+    doctor_password = doc.pop("doctor_password", None)
+
+    doc["created_at"] = now_iso()
+    r = await db.clinics.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    
+    if doctor_email and doctor_password:
+        await db.users.insert_one({
+            "name": doctor_name or "Doctor",
+            "email": doctor_email,
+            "password_hash": A.hash_password(doctor_password),
+            "role": "doctor",
+            "clinic_id": str(doc["_id"])
+        })
+        
+    return _clean(doc)
+
+
+@api.delete("/clinics/{cid}")
+async def delete_clinic(cid: str, user: dict = Depends(A.require_roles("admin"))):
+    await db.clinics.delete_one({"_id": oid(cid)})
+    # Also delete or unassign users from this clinic? We'll leave them for now or delete them.
+    # Optionally: await db.users.delete_many({"clinic_id": cid})
     return {"ok": True}
 
 
@@ -332,6 +442,7 @@ async def list_patients(search: Optional[str] = None, gender: Optional[str] = No
                         limit: int = 100, skip: int = 0,
                         user: dict = Depends(A.get_current_user)):
     q = {"is_deleted": {"$ne": True}}
+    _filter_clinic(q, user)
     if search:
         q["$or"] = [
             {"full_name": {"$regex": search, "$options": "i"}},
@@ -350,6 +461,8 @@ async def list_patients(search: Optional[str] = None, gender: Optional[str] = No
 @api.post("/patients")
 async def create_patient(payload: M.PatientIn, user: dict = Depends(A.get_current_user)):
     doc = payload.model_dump()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
     doc["patient_id"] = await _next_patient_id()
     doc["created_at"] = now_iso()
     doc["created_by"] = user["id"]
@@ -405,6 +518,7 @@ async def list_appointments(date_from: Optional[str] = None, date_to: Optional[s
     if status: q["status"] = status
     if doctor_id: q["doctor_id"] = doctor_id
     if patient_id: q["patient_id"] = patient_id
+    _filter_clinic(q, user)
     items = [_clean(a) for a in await db.appointments.find(q).sort([("date", 1), ("time", 1)]).to_list(1000)]
     # Enrich patient name
     pids = list({a["patient_id"] for a in items if a.get("patient_id")})
@@ -420,19 +534,78 @@ async def list_appointments(date_from: Optional[str] = None, date_to: Optional[s
 @api.post("/appointments")
 async def create_appointment(payload: M.AppointmentIn, user: dict = Depends(A.get_current_user)):
     doc = payload.model_dump()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
     doc["created_at"] = now_iso()
     doc["created_by"] = user["id"]
     r = await db.appointments.insert_one(doc)
     doc["_id"] = r.inserted_id
+    
+    # Send WhatsApp Notification
+    try:
+        patient = await db.patients.find_one({"_id": oid(doc["patient_id"])})
+        if patient and patient.get("phone"):
+            doctor = await db.doctors.find_one({"_id": oid(doc["doctor_id"])}) if doc.get("doctor_id") else None
+            clinic_name = await _get_clinic_name(doc.get("clinic_id"))
+            wa_body = sms.build_appointment_booked_message(
+                patient.get("full_name", "Patient"),
+                (doctor or {}).get("name", "our doctor"),
+                doc.get("date"),
+                doc.get("time"),
+                clinic_name
+            )
+            await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+                "appointment_id": str(doc["_id"]),
+                "type": "appointment_booked"
+            })
+    except Exception as e:
+        log.error(f"Failed to send booking WhatsApp: {e}")
+
     return _clean(doc)
 
 
 @api.put("/appointments/{aid}")
 async def update_appointment(aid: str, payload: M.AppointmentIn, user: dict = Depends(A.get_current_user)):
+    old_appt = await db.appointments.find_one({"_id": oid(aid)})
     doc = payload.model_dump()
     doc["updated_at"] = now_iso()
+    
+    # Check if rescheduling occurred
+    rescheduled = False
+    if old_appt:
+        if (old_appt.get("date") != doc.get("date") or 
+            old_appt.get("time") != doc.get("time") or 
+            old_appt.get("doctor_id") != doc.get("doctor_id")):
+            rescheduled = True
+            doc["status"] = "rescheduled"
+            doc["rescheduled_at"] = now_iso()
+            doc["previous_slot"] = {"date": old_appt.get("date"), "time": old_appt.get("time")}
+            doc["reminder_sent_at"] = None
+
     await db.appointments.update_one({"_id": oid(aid)}, {"$set": doc})
     a = await db.appointments.find_one({"_id": oid(aid)})
+    
+    if rescheduled and a:
+        try:
+            patient = await db.patients.find_one({"_id": oid(a["patient_id"])})
+            if patient and patient.get("phone"):
+                doctor = await db.doctors.find_one({"_id": oid(a["doctor_id"])}) if a.get("doctor_id") else None
+                clinic_name = await _get_clinic_name(a.get("clinic_id"))
+                wa_body = sms.build_reschedule_message(
+                    patient.get("full_name", "Patient"),
+                    (doctor or {}).get("name", "our doctor"),
+                    a.get("date", ""),
+                    a.get("time", ""),
+                    clinic_name,
+                    "general_reschedule" # defaults to "of scheduling changes"
+                )
+                await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+                    "appointment_id": str(a["_id"]),
+                    "type": "reschedule"
+                })
+        except Exception as e:
+            log.error(f"Failed to send reschedule WhatsApp: {e}")
+
     return _clean(a)
 
 
@@ -453,6 +626,7 @@ async def delete_appointment(aid: str, user: dict = Depends(A.get_current_user))
 async def list_visits(patient_id: Optional[str] = None, user: dict = Depends(A.get_current_user)):
     q = {}
     if patient_id: q["patient_id"] = patient_id
+    _filter_clinic(q, user)
     items = [_clean(v) for v in await db.visits.find(q).sort("visit_date", -1).to_list(1000)]
     return items
 
@@ -460,6 +634,8 @@ async def list_visits(patient_id: Optional[str] = None, user: dict = Depends(A.g
 @api.post("/visits")
 async def create_visit(payload: M.VisitIn, user: dict = Depends(A.get_current_user)):
     doc = payload.model_dump()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
     doc["created_at"] = now_iso()
     doc["created_by"] = user["id"]
     r = await db.visits.insert_one(doc)
@@ -486,6 +662,7 @@ async def delete_visit(vid: str, user: dict = Depends(A.get_current_user)):
 async def list_treatments(patient_id: Optional[str] = None, user: dict = Depends(A.get_current_user)):
     q = {}
     if patient_id: q["patient_id"] = patient_id
+    _filter_clinic(q, user)
     items = [_clean(t) for t in await db.treatments.find(q).sort("treatment_date", -1).to_list(1000)]
     pids = list({t["patient_id"] for t in items if t.get("patient_id")})
     pmap = {}
@@ -500,6 +677,8 @@ async def list_treatments(patient_id: Optional[str] = None, user: dict = Depends
 @api.post("/treatments")
 async def create_treatment(payload: M.TreatmentIn, user: dict = Depends(A.get_current_user)):
     doc = payload.model_dump()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
     doc["created_at"] = now_iso()
     r = await db.treatments.insert_one(doc)
     doc["_id"] = r.inserted_id
@@ -513,11 +692,40 @@ async def delete_treatment(tid: str, user: dict = Depends(A.get_current_user)):
 
 
 # ---------------- INVOICES ----------------
-async def _next_invoice_number() -> str:
-    settings = await db.settings.find_one({"_key": "clinic"}) or {}
+async def _next_invoice_number(clinic_id: Optional[str] = None) -> str:
+    settings = None
+    if clinic_id:
+        settings = await db.settings.find_one({"clinic_id": clinic_id})
+    if not settings:
+        settings = await db.settings.find_one({"_key": "clinic"}) or {}
     prefix = settings.get("invoice_prefix", "INV")
-    count = await db.invoices.count_documents({})
-    return f"{prefix}-{datetime.now(timezone.utc).year}-{(count + 1):05d}"
+    year = datetime.now(timezone.utc).year
+    inv_prefix = f"{prefix}-{year}-"
+    
+    # Search ALL invoices with this prefix pattern (ignore clinic_id filter)
+    # to get the true highest number and avoid duplicates
+    last_inv = await db.invoices.find(
+        {"invoice_number": {"$regex": f"^{prefix}-{year}-"}}
+    ).sort("invoice_number", -1).limit(1).to_list(1)
+    
+    last_count = 0
+    if last_inv:
+        last_num = last_inv[0].get("invoice_number", "")
+        try:
+            last_count = int(last_num.split("-")[-1])
+        except Exception:
+            last_count = await db.invoices.count_documents({})
+
+    # Try incrementing; if there's still a collision, keep incrementing
+    for attempt in range(10):
+        candidate = f"{inv_prefix}{(last_count + 1 + attempt):05d}"
+        existing = await db.invoices.find_one({"invoice_number": candidate})
+        if not existing:
+            return candidate
+    
+    # Fallback: use total count + timestamp to guarantee uniqueness
+    total = await db.invoices.count_documents({})
+    return f"{inv_prefix}{(total + 1):05d}"
 
 
 @api.get("/invoices")
@@ -526,6 +734,7 @@ async def list_invoices(patient_id: Optional[str] = None, status: Optional[str] 
     q = {}
     if patient_id: q["patient_id"] = patient_id
     if status: q["payment_status"] = status
+    _filter_clinic(q, user)
     items = [_clean(i) for i in await db.invoices.find(q).sort("invoice_date", -1).to_list(1000)]
     pids = list({t["patient_id"] for t in items if t.get("patient_id")})
     pmap = {}
@@ -570,11 +779,20 @@ def _compute_invoice_totals(doc: dict) -> dict:
 async def create_invoice(payload: M.InvoiceIn, user: dict = Depends(A.get_current_user)):
     doc = payload.model_dump()
     doc = _compute_invoice_totals(doc)
-    doc["invoice_number"] = await _next_invoice_number()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
+    doc["invoice_number"] = await _next_invoice_number(cid)
     doc["created_at"] = now_iso()
     doc["created_by"] = user["id"]
     r = await db.invoices.insert_one(doc)
     doc["_id"] = r.inserted_id
+    
+    # Notify via WhatsApp
+    try:
+        await _notify_invoice_created(doc)
+    except Exception as e:
+        log.error(f"Failed to send invoice WhatsApp: {e}")
+        
     return _clean(doc)
 
 
@@ -601,22 +819,74 @@ async def delete_invoice(iid: str, user: dict = Depends(A.require_roles("admin")
     return {"ok": True}
 
 
+async def _get_clinic_for_invoice(inv: dict, patient: dict = None) -> dict:
+    cid = inv.get("clinic_id") or (patient.get("clinic_id") if patient else None)
+    
+    clinic_doc = None
+    setting_doc = None
+    
+    if cid:
+        try:
+            clinic_doc = await db.clinics.find_one({"_id": oid(cid)})
+        except Exception:
+            clinic_doc = await db.clinics.find_one({"_id": cid})
+        setting_doc = await db.settings.find_one({"clinic_id": cid})
+
+    if not clinic_doc and not setting_doc:
+        setting_doc = await db.settings.find_one({"_key": "clinic"}) or {}
+        clinic_doc = await db.clinics.find_one({}) or {}
+    
+    setting_doc = setting_doc or {}
+    clinic_doc = clinic_doc or {}
+    
+    name = setting_doc.get("clinic_name") or clinic_doc.get("name") or "ABC Dental Clinic"
+    address = setting_doc.get("address") or clinic_doc.get("address") or ""
+    phone = setting_doc.get("phone") or clinic_doc.get("phone") or ""
+    email = setting_doc.get("email") or clinic_doc.get("email") or ""
+    gst = (
+        setting_doc.get("gst_number")
+        or setting_doc.get("gst")
+        or clinic_doc.get("gst")
+        or clinic_doc.get("gst_number")
+        or clinic_doc.get("gstin")
+        or "—"
+    )
+    doctor_name = setting_doc.get("doctor_name") or clinic_doc.get("doctor_name") or "Avi B P"
+    doctor_title = setting_doc.get("doctor_title") or clinic_doc.get("doctor_title") or "Orthodontist"
+    
+    return {
+        "name": name,
+        "clinic_name": name,
+        "address": address,
+        "phone": phone,
+        "email": email,
+        "gst": gst,
+        "gst_number": gst,
+        "doctor_name": doctor_name,
+        "doctor_title": doctor_title,
+    }
+
+
 @api.get("/invoices/{iid}/pdf")
 async def invoice_pdf(iid: str, user: dict = Depends(A.get_current_user)):
     inv = await db.invoices.find_one({"_id": oid(iid)})
     if not inv:
         raise HTTPException(status_code=404, detail="Not found")
     inv = _clean(inv)
-    patient = await db.patients.find_one({"_id": oid(inv["patient_id"])})
+    patient = None
+    if inv.get("patient_id"):
+        try:
+            patient = await db.patients.find_one({"_id": oid(inv["patient_id"])})
+        except Exception:
+            patient = await db.patients.find_one({"patient_id": inv["patient_id"]})
     patient = _clean(patient) if patient else {}
-    clinic = await db.settings.find_one({"_key": "clinic"}) or {}
-    clinic.pop("_id", None); clinic.pop("_key", None)
-    clinic["name"] = clinic.get("clinic_name", "ABC Dental Clinic")
+    clinic = await _get_clinic_for_invoice(inv, patient)
     pdf_bytes = generate_invoice_pdf(inv, patient, clinic)
+    inv_num = inv.get("invoice_number", "invoice")
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{inv["invoice_number"]}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{inv_num}.pdf"'},
     )
 
 
@@ -627,6 +897,7 @@ async def list_payments(patient_id: Optional[str] = None, invoice_id: Optional[s
     q = {}
     if patient_id: q["patient_id"] = patient_id
     if invoice_id: q["invoice_id"] = invoice_id
+    _filter_clinic(q, user)
     items = [_clean(p) for p in await db.payments.find(q).sort("payment_date", -1).to_list(1000)]
     return items
 
@@ -634,6 +905,8 @@ async def list_payments(patient_id: Optional[str] = None, invoice_id: Optional[s
 @api.post("/payments")
 async def create_payment(payload: M.PaymentIn, user: dict = Depends(A.get_current_user)):
     doc = payload.model_dump()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
     doc["created_at"] = now_iso()
     doc["created_by"] = user["id"]
     r = await db.payments.insert_one(doc)
@@ -650,18 +923,42 @@ async def create_payment(payload: M.PaymentIn, user: dict = Depends(A.get_curren
                 "paid_amount": paid, "balance": balance, "payment_status": status,
                 "payment_method": doc["payment_method"],
             }})
+            
+            # Send WhatsApp Notification
+            patient = await db.patients.find_one({"_id": oid(inv["patient_id"])})
+            if patient and patient.get("phone"):
+                try:
+                    clinic_name = await _get_clinic_name(inv.get("clinic_id"))
+                    portal_url = os.environ.get("PORTAL_URL", "http://localhost:5173/portal")
+                    wa_body = sms.build_payment_received_message(
+                        patient.get("full_name", "Patient"),
+                        inv.get("invoice_number", ""),
+                        float(doc["amount"]),
+                        clinic_name,
+                        f"{portal_url}/invoices"
+                    )
+                    await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+                        "invoice_id": str(inv["_id"]),
+                        "payment_id": str(doc["_id"]),
+                        "type": "payment_received"
+                    })
+                except Exception as e:
+                    log.error(f"Failed to send payment WhatsApp: {e}")
     return _clean(doc)
 
 
 # ---------------- DOCTORS ----------------
 @api.get("/doctors")
 async def list_doctors(user: dict = Depends(A.get_current_user)):
-    return [_clean(d) for d in await db.doctors.find({}).to_list(200)]
+    q = _filter_clinic({}, user)
+    return [_clean(d) for d in await db.doctors.find(q).to_list(200)]
 
 
 @api.post("/doctors")
 async def create_doctor(payload: M.DoctorIn, user: dict = Depends(A.require_roles("admin"))):
     doc = payload.model_dump()
+    cid = _get_user_clinic_id(user)
+    if cid: doc["clinic_id"] = cid
     doc["created_at"] = now_iso()
     r = await db.doctors.insert_one(doc)
     doc["_id"] = r.inserted_id
@@ -735,17 +1032,44 @@ async def doctor_slots(did: str, date_str: str = Query(..., alias="date"),
 
 # ---------------- SETTINGS ----------------
 @api.get("/settings")
-async def get_settings(user: dict = Depends(A.get_current_user)):
-    s = await db.settings.find_one({"_key": "clinic"}) or {}
+async def get_settings(clinic_id: Optional[str] = None, user: dict = Depends(A.get_current_user)):
+    cid = clinic_id or _get_user_clinic_id(user)
+    if cid:
+        s = await db.settings.find_one({"clinic_id": cid}) or {}
+        if not s:
+            clinic = await db.clinics.find_one({"_id": oid(cid)})
+            s = {
+                "clinic_name": clinic.get("name") if clinic else "Clinic Settings",
+                "clinic_logo": None,
+                "address": clinic.get("address") if clinic else None,
+                "phone": clinic.get("phone") if clinic else None,
+                "email": clinic.get("email") if clinic else None,
+                "invoice_prefix": "INV",
+                "currency": "INR",
+                "timezone": "Asia/Kolkata",
+            }
+    else:
+        s = await db.settings.find_one({"_key": "clinic"}) or {}
     s.pop("_id", None); s.pop("_key", None)
     return s
 
 
 @api.put("/settings")
-async def update_settings(payload: M.SettingsIn, user: dict = Depends(A.require_roles("admin"))):
+async def update_settings(payload: M.SettingsIn, clinic_id: Optional[str] = None, user: dict = Depends(A.require_roles("admin"))):
     doc = payload.model_dump()
     doc["updated_at"] = now_iso()
-    await db.settings.update_one({"_key": "clinic"}, {"$set": doc}, upsert=True)
+    cid = clinic_id or _get_user_clinic_id(user)
+    if cid:
+        doc["clinic_id"] = cid
+        await db.settings.update_one({"clinic_id": cid}, {"$set": doc}, upsert=True)
+        await db.clinics.update_one({"_id": oid(cid)}, {"$set": {
+            "name": doc.get("clinic_name"),
+            "address": doc.get("address"),
+            "phone": doc.get("phone"),
+            "email": doc.get("email"),
+        }})
+    else:
+        await db.settings.update_one({"_key": "clinic"}, {"$set": doc}, upsert=True)
     return doc
 
 
@@ -786,13 +1110,16 @@ async def dashboard_summary(user: dict = Depends(A.get_current_user)):
     month_start = date.today().replace(day=1).isoformat()
     year_start = date.today().replace(month=1, day=1).isoformat()
 
-    total_patients = await db.patients.count_documents({"is_deleted": {"$ne": True}})
-    today_appts = await db.appointments.count_documents({"date": today})
-    upcoming_appts = await db.appointments.count_documents({"date": {"$gt": today}, "status": "booked"})
-    cancelled_appts = await db.appointments.count_documents({"status": "cancelled"})
-    completed_treatments = await db.treatments.count_documents({})
+    base_q = _filter_clinic({}, user)
+
+    total_patients = await db.patients.count_documents({"is_deleted": {"$ne": True}, **base_q})
+    today_appts = await db.appointments.count_documents({"date": today, **base_q})
+    upcoming_appts = await db.appointments.count_documents({"date": {"$gt": today}, "status": "booked", **base_q})
+    cancelled_appts = await db.appointments.count_documents({"status": "cancelled", **base_q})
+    completed_treatments = await db.treatments.count_documents(base_q)
 
     async def sum_revenue(match):
+        match.update(base_q)
         pipe = [{"$match": match}, {"$group": {"_id": None, "s": {"$sum": "$amount"}}}]
         r = await db.payments.aggregate(pipe).to_list(1)
         return r[0]["s"] if r else 0
@@ -801,16 +1128,18 @@ async def dashboard_summary(user: dict = Depends(A.get_current_user)):
     revenue_month = await sum_revenue({"payment_date": {"$gte": month_start}})
     revenue_year = await sum_revenue({"payment_date": {"$gte": year_start}})
 
-    pending_pipe = [{"$match": {"payment_status": {"$in": ["unpaid", "partial"]}}},
+    pending_match = {"payment_status": {"$in": ["unpaid", "partial"]}}
+    pending_match.update(base_q)
+    pending_pipe = [{"$match": pending_match},
                     {"$group": {"_id": None, "s": {"$sum": "$balance"}}}]
     pending_r = await db.invoices.aggregate(pending_pipe).to_list(1)
     pending_payments = pending_r[0]["s"] if pending_r else 0
 
-    recent_patients = [_clean(p) for p in await db.patients.find({"is_deleted": {"$ne": True}}).sort("created_at", -1).limit(5).to_list(5)]
-    recent_bills = [_clean(i) for i in await db.invoices.find({}).sort("created_at", -1).limit(5).to_list(5)]
+    recent_patients = [_clean(p) for p in await db.patients.find({"is_deleted": {"$ne": True}, **base_q}).sort("created_at", -1).limit(5).to_list(5)]
+    recent_bills = [_clean(i) for i in await db.invoices.find(base_q).sort("created_at", -1).limit(5).to_list(5)]
 
     # Today's schedule
-    today_schedule_raw = await db.appointments.find({"date": today}).sort("time", 1).to_list(50)
+    today_schedule_raw = await db.appointments.find({"date": today, **base_q}).sort("time", 1).to_list(50)
     today_schedule = []
     for a in today_schedule_raw:
         a = _clean(a)
@@ -836,7 +1165,9 @@ async def dashboard_summary(user: dict = Depends(A.get_current_user)):
         first = date(year, month, 1).isoformat()
         last_day = monthrange(year, month)[1]
         last = date(year, month, last_day).isoformat()
-        pipe = [{"$match": {"payment_date": {"$gte": first, "$lte": last}}},
+        m_q = {"payment_date": {"$gte": first, "$lte": last}}
+        m_q.update(base_q)
+        pipe = [{"$match": m_q},
                 {"$group": {"_id": None, "s": {"$sum": "$amount"}}}]
         r = await db.payments.aggregate(pipe).to_list(1)
         rev_by_month.append({"month": f"{year}-{month:02d}", "revenue": r[0]["s"] if r else 0})
@@ -852,11 +1183,14 @@ async def dashboard_summary(user: dict = Depends(A.get_current_user)):
         first = date(year, month, 1).isoformat()
         last_day = monthrange(year, month)[1]
         last = date(year, month, last_day).isoformat() + "T23:59:59"
-        c = await db.patients.count_documents({"created_at": {"$gte": first, "$lte": last}})
+        p_q = {"created_at": {"$gte": first, "$lte": last}, "is_deleted": {"$ne": True}}
+        p_q.update(base_q)
+        c = await db.patients.count_documents(p_q)
         patients_by_month.append({"month": f"{year}-{month:02d}", "count": c})
 
     # Procedure stats
-    proc_pipe = [{"$group": {"_id": "$procedure_name", "count": {"$sum": 1}}},
+    proc_pipe = [{"$match": base_q},
+                 {"$group": {"_id": "$procedure_name", "count": {"$sum": 1}}},
                  {"$sort": {"count": -1}}, {"$limit": 10}]
     procs = [{"name": p["_id"] or "Unknown", "count": p["count"]}
              for p in await db.treatments.aggregate(proc_pipe).to_list(10)]
@@ -882,8 +1216,10 @@ async def dashboard_summary(user: dict = Depends(A.get_current_user)):
 
 @api.get("/reports/revenue")
 async def report_revenue(date_from: str, date_to: str, user: dict = Depends(A.get_current_user)):
+    match_q = {"payment_date": {"$gte": date_from, "$lte": date_to}}
+    _filter_clinic(match_q, user)
     pipe = [
-        {"$match": {"payment_date": {"$gte": date_from, "$lte": date_to}}},
+        {"$match": match_q},
         {"$group": {"_id": "$payment_date", "revenue": {"$sum": "$amount"}}},
         {"$sort": {"_id": 1}},
     ]
@@ -893,7 +1229,9 @@ async def report_revenue(date_from: str, date_to: str, user: dict = Depends(A.ge
 
 @api.get("/reports/outstanding")
 async def report_outstanding(user: dict = Depends(A.get_current_user)):
-    invs = await db.invoices.find({"payment_status": {"$in": ["unpaid", "partial"]}}).to_list(1000)
+    q = {"payment_status": {"$in": ["unpaid", "partial"]}}
+    _filter_clinic(q, user)
+    invs = await db.invoices.find(q).to_list(1000)
     out = []
     for inv in invs:
         inv = _clean(inv)
@@ -907,11 +1245,19 @@ async def report_outstanding(user: dict = Depends(A.get_current_user)):
 @api.get("/search")
 async def global_search(q: str, user: dict = Depends(A.get_current_user)):
     rx = {"$regex": q, "$options": "i"}
-    patients = [_clean(p) for p in await db.patients.find({"$or": [
+    pat_q = {"$or": [
         {"full_name": rx}, {"phone": rx}, {"email": rx}, {"patient_id": rx}
-    ]}).limit(10).to_list(10)]
-    invoices = [_clean(i) for i in await db.invoices.find({"invoice_number": rx}).limit(10).to_list(10)]
-    appts_docs = await db.appointments.find({"reason": rx}).limit(10).to_list(10)
+    ]}
+    _filter_clinic(pat_q, user)
+    patients = [_clean(p) for p in await db.patients.find(pat_q).limit(10).to_list(10)]
+    
+    inv_q = {"invoice_number": rx}
+    _filter_clinic(inv_q, user)
+    invoices = [_clean(i) for i in await db.invoices.find(inv_q).limit(10).to_list(10)]
+    
+    appt_q = {"reason": rx}
+    _filter_clinic(appt_q, user)
+    appts_docs = await db.appointments.find(appt_q).limit(10).to_list(10)
     appts = [_clean(a) for a in appts_docs]
     return {"patients": patients, "invoices": invoices, "appointments": appts}
 
@@ -990,6 +1336,12 @@ async def get_current_patient(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+@api.get("/portal/clinics")
+async def portal_list_clinics():
+    clinics = await db.clinics.find({}).to_list(500)
+    return [{"id": str(c["_id"]), "name": c["name"], "address": c.get("address"), "phone": c.get("phone")} for c in clinics]
+
+
 @api.post("/portal/signup")
 async def portal_signup(payload: M.PatientSignupIn, response: Response):
     email = payload.email.lower()
@@ -1006,8 +1358,10 @@ async def portal_signup(payload: M.PatientSignupIn, response: Response):
         "self_registered": True,
         "created_at": now_iso(),
         "is_deleted": False,
+        "clinic_id": payload.clinic_id,
     }
     if existing:
+        doc["clinic_id"] = existing.get("clinic_id") or payload.clinic_id
         await db.patients.update_one({"_id": existing["_id"]}, {"$set": doc})
         pid = existing["_id"]
     else:
@@ -1035,12 +1389,19 @@ async def portal_login(payload: M.PatientLoginIn, response: Response):
 
 @api.get("/portal/me")
 async def portal_me(patient: dict = Depends(get_current_patient)):
+    if patient.get("clinic_id"):
+        clinic = await db.clinics.find_one({"_id": oid(patient["clinic_id"])})
+        if clinic:
+            patient["clinic_name"] = clinic.get("name")
     return patient
 
 
 @api.get("/portal/doctors")
 async def portal_doctors(patient: dict = Depends(get_current_patient)):
-    docs = await db.doctors.find({"active": {"$ne": False}}).to_list(200)
+    q = {"active": {"$ne": False}}
+    if patient.get("clinic_id"):
+        q["clinic_id"] = patient["clinic_id"]
+    docs = await db.doctors.find(q).to_list(200)
     return [_clean(d) for d in docs]
 
 
@@ -1095,11 +1456,13 @@ async def portal_book(payload: M.PatientBookIn, patient: dict = Depends(get_curr
         "created_at": now_iso(),
         "created_by": patient["id"],
     }
+    if patient.get("clinic_id"):
+        doc["clinic_id"] = patient["clinic_id"]
     r = await db.appointments.insert_one(doc)
     doc["_id"] = r.inserted_id
     # Send instant confirmation email
     doctor = await db.doctors.find_one({"_id": oid(payload.doctor_id)})
-    clinic_name = await _get_clinic_name()
+    clinic_name = await _get_clinic_name(patient.get("clinic_id"))
     if patient.get("email"):
         subject, html, text = N.build_confirmation_email(
             patient.get("full_name", "there"),
@@ -1110,6 +1473,22 @@ async def portal_book(payload: M.PatientBookIn, patient: dict = Depends(get_curr
             "appointment_id": str(doc["_id"]),
             "type": "confirmation",
         })
+        
+    # Send instant WhatsApp confirmation
+    if patient.get("phone"):
+        try:
+            wa_body = sms.build_appointment_booked_message(
+                patient.get("full_name", "Patient"),
+                (doctor or {}).get("name", "our doctor"),
+                payload.date, payload.time, clinic_name
+            )
+            await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+                "appointment_id": str(doc["_id"]),
+                "type": "appointment_booked"
+            })
+        except Exception as e:
+            log.error(f"Failed to send portal booking WhatsApp: {e}")
+
     return _clean(doc)
 
 
@@ -1145,6 +1524,33 @@ async def portal_invoices(patient: dict = Depends(get_current_patient)):
     return [_clean(i) for i in items]
 
 
+@api.get("/portal/invoices/{iid}/pdf")
+async def portal_invoice_pdf(iid: str, patient: dict = Depends(get_current_patient)):
+    """Download invoice PDF — patient portal (only their own invoices)."""
+    inv = await db.invoices.find_one({"_id": oid(iid)})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    inv = _clean(inv)
+    # Security: ensure the invoice belongs to the authenticated patient
+    if inv.get("patient_id") != patient["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    pat_doc = None
+    if inv.get("patient_id"):
+        try:
+            pat_doc = await db.patients.find_one({"_id": oid(inv["patient_id"])})
+        except Exception:
+            pat_doc = await db.patients.find_one({"patient_id": inv["patient_id"]})
+    pat_doc = _clean(pat_doc) if pat_doc else {}
+    clinic = await _get_clinic_for_invoice(inv, pat_doc)
+    pdf_bytes = generate_invoice_pdf(inv, pat_doc, clinic)
+    inv_num = inv.get("invoice_number", "invoice")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{inv_num}.pdf"'},
+    )
+
+
 # ---------------- RESCHEDULE + REASON SMS ----------------
 @api.post("/appointments/{aid}/reschedule")
 async def reschedule_appointment(aid: str, payload: M.RescheduleIn,
@@ -1162,9 +1568,9 @@ async def reschedule_appointment(aid: str, payload: M.RescheduleIn,
     return _clean(await db.appointments.find_one({"_id": oid(aid)}))
 
 
-@api.post("/appointments/{aid}/send-reschedule-sms")
-async def send_reschedule_sms(aid: str, payload: M.RescheduleSmsIn,
-                              user: dict = Depends(A.require_roles("admin", "receptionist"))):
+@api.post("/appointments/{aid}/send-reschedule-whatsapp")
+async def send_reschedule_whatsapp(aid: str, payload: M.RescheduleSmsIn,
+                               user: dict = Depends(A.require_roles("admin", "receptionist"))):
     if payload.reason not in N.RESCHEDULE_REASONS:
         raise HTTPException(status_code=400, detail="Invalid reason")
     appt = await db.appointments.find_one({"_id": oid(aid)})
@@ -1174,7 +1580,9 @@ async def send_reschedule_sms(aid: str, payload: M.RescheduleSmsIn,
     if not patient or not patient.get("email"):
         raise HTTPException(status_code=400, detail="Patient missing email")
     doctor = await db.doctors.find_one({"_id": oid(appt["doctor_id"])}) if appt.get("doctor_id") else None
-    clinic_name = await _get_clinic_name()
+    clinic_name = await _get_clinic_name(appt.get("clinic_id") or patient.get("clinic_id"))
+    
+    # Email
     subject, html, text = N.build_reschedule_email(
         patient.get("full_name", "there"),
         (doctor or {}).get("name", "your doctor"),
@@ -1186,12 +1594,26 @@ async def send_reschedule_sms(aid: str, payload: M.RescheduleSmsIn,
         "type": "reschedule",
         "reason": payload.reason,
     })
+    
+    # WhatsApp
+    if patient.get("phone"):
+        wa_body = sms.build_reschedule_message(
+            patient.get("full_name", "there"),
+            (doctor or {}).get("name", "your doctor"),
+            appt.get("date", ""), appt.get("time", ""),
+            clinic_name, payload.reason,
+        )
+        await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+            "appointment_id": str(appt["_id"]),
+            "type": "reschedule",
+            "reason": payload.reason,
+        })
+
     await db.appointments.update_one({"_id": appt["_id"]}, {"$set": {
-        "reschedule_sms_sent_at": now_iso(),
-        "reschedule_sms_reason": payload.reason,
+        "reschedule_whatsapp_sent_at": now_iso(),
+        "reschedule_whatsapp_reason": payload.reason,
     }})
     return result
-
 
 # ---------------- VISIT → INVOICE ----------------
 @api.post("/visits/{vid}/generate-invoice")
@@ -1217,21 +1639,59 @@ async def generate_invoice_from_visit(vid: str, user: dict = Depends(A.require_r
         "payment_method": v.get("payment_method"),
         "notes": f"Generated from visit on {v.get('visit_date')}",
     }
+    clinic_id = v.get("clinic_id") or _get_user_clinic_id(user)
+    if clinic_id:
+        inv_doc["clinic_id"] = clinic_id
     inv_doc = _compute_invoice_totals(inv_doc)
-    inv_doc["invoice_number"] = await _next_invoice_number()
+    inv_doc["invoice_number"] = await _next_invoice_number(clinic_id)
     inv_doc["created_at"] = now_iso()
     inv_doc["created_by"] = user["id"]
     inv_doc["visit_id"] = str(v["_id"])
     r = await db.invoices.insert_one(inv_doc)
     await db.visits.update_one({"_id": v["_id"]}, {"$set": {"invoice_id": str(r.inserted_id)}})
     inv_doc["_id"] = r.inserted_id
+    
+    # Notify via WhatsApp
+    try:
+        await _notify_invoice_created(inv_doc)
+    except Exception as e:
+        log.error(f"Failed to send invoice WhatsApp: {e}")
+        
     return _clean(inv_doc)
 
 
 # ---------------- SMS REMINDERS ----------------
-async def _get_clinic_name() -> str:
+async def _get_clinic_name(clinic_id: Optional[str] = None) -> str:
+    if clinic_id:
+        c = await db.clinics.find_one({"_id": oid(clinic_id)})
+        if c and c.get("name"):
+            return c["name"]
+        s = await db.settings.find_one({"clinic_id": clinic_id})
+        if s and s.get("clinic_name"):
+            return s["clinic_name"]
     s = await db.settings.find_one({"_key": "clinic"}) or {}
     return s.get("clinic_name", "ABC Dental Clinic")
+
+
+async def _notify_invoice_created(inv: dict):
+    patient = await db.patients.find_one({"_id": oid(inv["patient_id"])})
+    if not patient or not patient.get("phone"):
+        return
+    clinic_name = await _get_clinic_name(inv.get("clinic_id"))
+    portal_url = os.environ.get("PORTAL_URL", "http://localhost:5173/portal")
+    wa_body = sms.build_invoice_whatsapp_message(
+        patient.get("full_name", "Patient"),
+        inv.get("invoice_number", ""),
+        float(inv.get("net_amount", 0)),
+        inv.get("invoice_date", date.today().isoformat()),
+        clinic_name,
+        f"{portal_url}/invoices"
+    )
+    await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+        "invoice_id": str(inv["_id"]),
+        "patient_id": str(patient["_id"]),
+        "type": "invoice_created"
+    })
 
 
 async def _send_appointment_reminder(appt: dict, force: bool = False) -> dict:
@@ -1248,7 +1708,7 @@ async def _send_appointment_reminder(appt: dict, force: bool = False) -> dict:
     patient = await db.patients.find_one({"_id": oid(appt["patient_id"])})
     if not patient or not patient.get("email"):
         return {"ok": False, "error": "patient missing email"}
-    clinic_name = await _get_clinic_name()
+    clinic_name = await _get_clinic_name(appt.get("clinic_id") or patient.get("clinic_id"))
     subject, html, text = N.build_reminder_email(
         patient.get("full_name", "Patient"),
         appt.get("date", ""), appt.get("time", ""),
@@ -1259,6 +1719,20 @@ async def _send_appointment_reminder(appt: dict, force: bool = False) -> dict:
         "patient_id": str(patient["_id"]),
         "type": "reminder",
     })
+    
+    # WhatsApp Reminder
+    if patient.get("phone"):
+        wa_body = sms.build_reminder_message(
+            patient.get("full_name", "Patient"),
+            appt.get("date", ""), appt.get("time", ""),
+            clinic_name,
+        )
+        await sms.send_whatsapp(db, patient["phone"], wa_body, meta={
+            "appointment_id": str(appt["_id"]) if "_id" in appt else appt.get("id"),
+            "patient_id": str(patient["_id"]),
+            "type": "reminder",
+        })
+
     # Track on appointment doc when actually sent (or simulated)
     if result.get("status") in ("sent", "simulated"):
         await db.appointments.update_one(

@@ -35,7 +35,7 @@ export default function Sidebar({ onNavigate }) {
             <Activity className="w-5 h-5 text-white" />
           </div>
           <div>
-            <div className="font-bold text-base leading-tight" style={{fontFamily:"Manrope"}}>ABC Dental</div>
+            <div className="font-bold text-base leading-tight" style={{fontFamily:"Manrope"}}>Your Dental</div>
             <div className="text-xs text-slate-500 dark:text-slate-400">Clinic Suite</div>
           </div>
         </div>

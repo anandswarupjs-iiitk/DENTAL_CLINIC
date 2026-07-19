@@ -16,6 +16,7 @@ class RegisterIn(BaseModel):
     password: str
     name: str
     role: str = "receptionist"  # admin | doctor | receptionist
+    clinic_id: Optional[str] = None
 
 
 class ForgotIn(BaseModel):
@@ -181,6 +182,7 @@ class PatientSignupIn(BaseModel):
     email: EmailStr
     age: int
     password: str
+    clinic_id: str
 
 
 class PatientLoginIn(BaseModel):
@@ -227,3 +229,19 @@ class NotificationIn(BaseModel):
     message: str
     type: str = "info"  # info | success | warning | danger
     target_role: Optional[str] = None
+
+
+# ---------- CLINIC ----------
+class ClinicIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    invoice_prefix: Optional[str] = "INV"
+    currency: Optional[str] = "INR"
+    timezone: Optional[str] = "Asia/Kolkata"
+    # Optional doctor details for initialization
+    doctor_name: Optional[str] = None
+    doctor_email: Optional[str] = None
+    doctor_password: Optional[str] = None
