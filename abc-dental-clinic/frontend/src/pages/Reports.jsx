@@ -28,7 +28,8 @@ export default function Reports() {
     ]);
     setRevenue(r1.data); setOutstanding(r2.data);
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [activeClinicId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [activeClinicId]);
 
   const exportCsv = (rows, name) => {
     if (!rows.length) return;

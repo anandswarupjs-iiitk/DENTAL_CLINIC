@@ -36,6 +36,7 @@ export default function Patients() {
     const { data } = await api.get(`/patients?search=${encodeURIComponent(q)}&limit=100`);
     setRows(data.items); setTotal(data.total);
   };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setRows(null); const t = setTimeout(load, 300); return () => clearTimeout(t); }, [q, activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm(emptyPatient); setOpen(true); };

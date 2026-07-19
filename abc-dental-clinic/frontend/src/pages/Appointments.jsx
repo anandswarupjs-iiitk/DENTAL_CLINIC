@@ -51,7 +51,8 @@ export default function Appointments() {
     const { data } = await api.get(`/appointments?date_from=${f}&date_to=${t}`);
     setAppts(data);
   };
-  useEffect(() => { setAppts(null); load(); /* eslint-disable-next-line */ }, [refDate, view, activeClinicId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setAppts(null); load(); }, [refDate, view, activeClinicId]);
   useEffect(() => { api.get("/patients?limit=500").then(r => setPatients(r.data.items)).catch(()=>{}); }, [activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm({...emptyAppt, date: refDate.toISOString().slice(0,10)}); setOpen(true); };
