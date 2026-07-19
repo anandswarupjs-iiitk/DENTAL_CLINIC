@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API = "http://127.0.0.1:8001/api";
+const API = `${process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8001"}/api`;
 
 // Staff-side axios (Bearer token from localStorage)
 export const api = axios.create({ baseURL: API, withCredentials: true });

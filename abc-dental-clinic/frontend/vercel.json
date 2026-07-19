@@ -6,7 +6,8 @@
   "framework": "create-react-app",
   "env": {
     "DISABLE_ESLINT_PLUGIN": "true",
-    "CI": "false"
+    "CI": "false",
+    "REACT_APP_BACKEND_URL": "https://dental-clinic-uz4x.onrender.com"
   },
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
