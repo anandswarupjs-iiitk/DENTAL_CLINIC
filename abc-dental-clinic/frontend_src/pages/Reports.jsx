@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { api } from "@/api/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,14 +21,14 @@ export default function Reports() {
   const [revenue, setRevenue] = useState([]);
   const [outstanding, setOutstanding] = useState([]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [r1, r2] = await Promise.all([
       api.get(`/reports/revenue?date_from=${df}&date_to=${dt}`),
       api.get("/reports/outstanding"),
     ]);
     setRevenue(r1.data); setOutstanding(r2.data);
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [activeClinicId]);
+  }, [df, dt]);
+  useEffect(() => { load(); }, [load, activeClinicId]);
 
   const exportCsv = (rows, name) => {
     if (!rows.length) return;

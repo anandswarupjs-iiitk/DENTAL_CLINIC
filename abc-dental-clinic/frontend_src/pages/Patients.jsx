@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { api, formatApiError } from "@/api/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,11 +32,11 @@ export default function Patients() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyPatient);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const { data } = await api.get(`/patients?search=${encodeURIComponent(q)}&limit=100`);
     setRows(data.items); setTotal(data.total);
-  };
-  useEffect(() => { setRows(null); const t = setTimeout(load, 300); return () => clearTimeout(t); }, [q, activeClinicId]);
+  }, [q]);
+  useEffect(() => { setRows(null); const t = setTimeout(load, 300); return () => clearTimeout(t); }, [load, activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm(emptyPatient); setOpen(true); };
   const openEdit = (p) => { setEditing(p); setForm({...emptyPatient, ...p, age: p.age || ""}); setOpen(true); };
