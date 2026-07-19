@@ -4,6 +4,10 @@
   "outputDirectory": "build",
   "installCommand": "yarn install",
   "framework": "create-react-app",
+  "env": {
+    "DISABLE_ESLINT_PLUGIN": "true",
+    "CI": "false"
+  },
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
