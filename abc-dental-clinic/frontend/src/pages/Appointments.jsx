@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, formatApiError } from "@/api/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,7 @@ export default function Appointments() {
   const [reasonModal, setReasonModal] = useState(null); // appt object to send SMS for
   const [reasonPick, setReasonPick] = useState("");
 
-  const load = async () => {
+  const load = useCallback(async () => {
     // window depending on view
     const start = new Date(refDate); start.setHours(0,0,0,0);
     let end = new Date(start);
@@ -50,9 +50,9 @@ export default function Appointments() {
     const f = start.toISOString().slice(0,10), t = end.toISOString().slice(0,10);
     const { data } = await api.get(`/appointments?date_from=${f}&date_to=${t}`);
     setAppts(data);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setAppts(null); load(); }, [refDate, view, activeClinicId]);
+  }, [refDate, view]);
+
+  useEffect(() => { setAppts(null); load(); }, [load, activeClinicId]);
   useEffect(() => { api.get("/patients?limit=500").then(r => setPatients(r.data.items)).catch(()=>{}); }, [activeClinicId]);
 
   const openNew = () => { setEditing(null); setForm({...emptyAppt, date: refDate.toISOString().slice(0,10)}); setOpen(true); };
