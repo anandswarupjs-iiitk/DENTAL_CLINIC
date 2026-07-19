@@ -7,6 +7,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: RENDER
+        value: "true"
+      - key: ENV
+        value: production
       - key: DB_NAME
         value: dental_clinic_db
       - key: APP_NAME
@@ -22,7 +26,7 @@ services:
       - key: MONGO_URL
         sync: false
       - key: CORS_ORIGINS
-        sync: false
+        value: "https://dental-clinic-2rwm-d7d4de9ng-anandswarupjs-iiitks-projects.vercel.app"
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
