@@ -1847,7 +1847,10 @@ async def root():
     return {"ok": True, "service": "ABC Dental Clinic API"}
 
 
-app.include_router(api)
+@api.get("/health")
+async def health():
+    return {"ok": True, "status": "healthy", "service": "ABC Dental Clinic API"}
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -1856,6 +1859,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(api)
+
+
+@app.get("/")
+async def app_root():
+    return {"ok": True, "service": "ABC Dental Clinic API"}
 
 
 @app.on_event("shutdown")
