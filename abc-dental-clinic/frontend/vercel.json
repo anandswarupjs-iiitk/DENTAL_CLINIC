@@ -4,6 +4,13 @@
   "outputDirectory": "build",
   "installCommand": "yarn install",
   "framework": "create-react-app",
+  "build": {
+    "env": {
+      "DISABLE_ESLINT_PLUGIN": "true",
+      "CI": "false",
+      "REACT_APP_BACKEND_URL": "https://dental-clinic-uz4x.onrender.com"
+    }
+  },
   "env": {
     "DISABLE_ESLINT_PLUGIN": "true",
     "CI": "false",

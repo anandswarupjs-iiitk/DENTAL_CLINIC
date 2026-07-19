@@ -235,10 +235,23 @@ async def seed_clinics():
 
 # ---------------- AUTH ----------------
 def _set_auth_cookies(resp: Response, access: str, refresh: str, remember: bool = False):
-    resp.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax",
-                    max_age=43200, path="/")
-    resp.set_cookie("refresh_token", refresh, httponly=True, secure=False, samesite="lax",
-                    max_age=604800 if remember else 86400, path="/")
+    is_prod = os.environ.get("RENDER") == "true" or os.environ.get("ENV", "").lower() == "production"
+    resp.set_cookie(
+        "access_token", access,
+        httponly=True,
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
+        max_age=43200,
+        path="/",
+    )
+    resp.set_cookie(
+        "refresh_token", refresh,
+        httponly=True,
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
+        max_age=604800 if remember else 86400,
+        path="/",
+    )
 
 
 @api.post("/auth/login")
@@ -1852,10 +1865,22 @@ async def health():
     return {"ok": True, "status": "healthy", "service": "ABC Dental Clinic API"}
 
 
+_raw_origins = os.environ.get("CORS_ORIGINS", "")
+# When credentials=True, wildcard "*" is rejected by browsers — must be explicit origins.
+# Fall back to permissive list only in local dev (no CORS_ORIGINS set).
+if _raw_origins and _raw_origins.strip() != "*":
+    _allow_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+else:
+    _allow_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=_allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
